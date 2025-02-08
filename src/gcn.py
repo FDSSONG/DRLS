@@ -10,7 +10,7 @@ import numpy as np
 import tensorflow as tf
 from tf_op import glorot, ones, zeros
 
-class GraphCNN(object):
+class GraphCNN(tf.keras.Model):
     def __init__(self, inputs, input_dim, hid_dims, output_dim,
                  max_depth, act_fn, scope='gcn'):
 
@@ -30,7 +30,7 @@ class GraphCNN(object):
 
         # message passing
         # self.masks = tf.placeholder(tf.float32, [None, None, 1])
-        self.reachable_edge_matrix = tf.placeholder(tf.float32, [None, None, None])
+        self.reachable_edge_matrix = tf.keras.Input(shape=(None, None), dtype=tf.float32)
 
         # initialize message passing transformation parameters
         # h: x -> x'

@@ -31,29 +31,38 @@ def expand_act_on_state(state, sub_acts):
 
 def glorot(shape, dtype=tf.float32, scope='default'):
     # Xavier Glorot & Yoshua Bengio (AISTATS 2010) initialization (Eqn 16)
-    with tf.variable_scope(scope):
+    # 使用 tf.name_scope 仅用于组织名称（可选）
+    with tf.name_scope(scope):
         init_range = np.sqrt(6.0 / (shape[0] + shape[1]))
-        init = tf.random_uniform(
+        init = tf.random.uniform(
             shape, minval=-init_range, maxval=init_range, dtype=dtype)
-        return tf.Variable(init)
+    # 这里直接返回变量；在 TF2 中，变量通常由 tf.Module 或 keras 层管理
+    return tf.Variable(init, name="glorot_variable")
 
 
 def leaky_relu(features, alpha=0.2, name=None):
-  """Compute the Leaky ReLU activation function.
-  "Rectifier Nonlinearities Improve Neural Network Acoustic Models"
-  AL Maas, AY Hannun, AY Ng - Proc. ICML, 2013
-  http://web.stanford.edu/~awni/papers/relu_hybrid_icml2013_final.pdf
-  Args:
-    features: A `Tensor` representing preactivation values.
-    alpha: Slope of the activation function at x < 0.
-    name: A name for the operation (optional).
-  Returns:
-    The activation value.
-  """
-  with ops.name_scope(name, "LeakyRelu", [features, alpha]):
-    features = ops.convert_to_tensor(features, name="features")
-    alpha = ops.convert_to_tensor(alpha, name="alpha")
-    return math_ops.maximum(alpha * features, features)
+    """
+    计算 Leaky ReLU 激活函数。
+
+    参考论文：
+      "Rectifier Nonlinearities Improve Neural Network Acoustic Models"
+      AL Maas, AY Hannun, AY Ng - Proc. ICML, 2013
+      http://web.stanford.edu/~awni/papers/relu_hybrid_icml2013_final.pdf
+
+    参数：
+      features：预激活值张量，通常为一个 TensorFlow 张量（也可能是 KerasTensor）。
+      alpha：当输入小于0时的斜率，默认值为0.2。
+      name：操作的名称（可选）。
+
+    返回：
+      激活后的张量，计算公式为：max(alpha * features, features)
+    """
+    # 使用 tf.name_scope 创建一个命名空间，方便后续查看计算图的结构
+    with tf.name_scope(name or "LeakyRelu"):
+        # 注意：这里不再调用 convert_to_tensor，因为 features 和 alpha
+        # 可能已经是 Tensor 或者 KerasTensor，直接使用它们可以避免额外转换
+        # 并且保证在 Keras 的符号计算图中正常传播。
+        return tf.maximum(alpha * features, features)
 
 
 def masked_outer_product(a, b, mask):
@@ -86,8 +95,8 @@ def ones(shape, dtype=tf.float32, scope='default'):
         init = tf.ones(shape, dtype=dtype)
         return tf.Variable(init)
 
-
 def zeros(shape, dtype=tf.float32, scope='default'):
-    with tf.variable_scope(scope):
+    # tf.name_scope 仅用于分组名称，不会影响变量重用
+    with tf.name_scope(scope):
         init = tf.zeros(shape, dtype=dtype)
-        return tf.Variable(init)
+    return tf.Variable(init, name="zeros")

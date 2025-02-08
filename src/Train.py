@@ -1,4 +1,6 @@
-import tensorflow.contrib.layers as tl
+import tensorflow as tf
+from tensorflow import keras
+from keras import layers as tl
 import time
 from gcn import GraphCNN
 from agent import Agent
@@ -16,13 +18,12 @@ from utils import *
 from tf_op import *
 
 class ActorAgent(Agent):
-    def __init__(self, sess, policy_input_dim, time_input_dim, hid_dims, output_dim,
+    def __init__(self, policy_input_dim, time_input_dim, hid_dims, output_dim,
                  max_depth, eps=1e-6, act_fn=leaky_relu,
-                 optimizer=tf.train.AdamOptimizer, scope='actor_agent'):
+                 optimizer=tf.keras.optimizers.Adam, scope='actor_agent'):
 
         Agent.__init__(self)
 
-        self.sess = sess
         self.policy_input_dim = policy_input_dim
         self.time_input_dim = time_input_dim
         self.hid_dims = hid_dims
@@ -38,7 +39,7 @@ class ActorAgent(Agent):
         self.flow_count_record = {}
 
         # node input dimension: [total_num_nodes, num_features]
-        self.policy_inputs = tf.placeholder(tf.float32, [None, args.policy_input_dim])
+        self.policy_inputs = tf.keras.Input(shape=(args.policy_input_dim,), dtype=tf.float32)
 
         # 8维
         self.gcn_policy = GraphCNN(
@@ -54,17 +55,17 @@ class ActorAgent(Agent):
 
         # draw action based on the probability (from OpenAI baselines)
         # node_acts [batch_size, 1]
-        logits = tf.log(self.policy_act_probs)
-        noise = tf.random_uniform(tf.shape(logits))
+        logits = tf.math.log(self.policy_act_probs)
+        noise = tf.random.uniform(tf.shape(logits))
         # 这处对 noise 连用两个log好奇怪
-        self.policy_acts = tf.argmax(logits - tf.log(-tf.log(noise)), 1)
+        self.policy_acts = tf.argmax(logits - tf.math.log(-tf.math.log(noise)), 1)
 
         # Selected action for node, 0-1 vector ([batch_size, total_num_nodes])
-        self.edge_selected_vec = tf.placeholder(tf.float32, [None, None])
+        self.edge_selected_vec = tf.keras.Input(shape=(None,), dtype=tf.float32)
         # Selected action for job, 0-1 vector ([batch_size, num_jobs, num_limits])
 
         # advantage term (from Monte Calro or critic) ([batch_size, 1])
-        self.adv = tf.placeholder(tf.float32, [1])
+        self.adv = tf.keras.Input(shape=(1,), dtype=tf.float32)
 
         # select node action probability
         # node_act_probs：一个全连接网络
@@ -79,7 +80,7 @@ class ActorAgent(Agent):
         # multiply：矩阵各对应位置元素相乘
         # self.eps：一个常量，感觉是用来防止和为0的
         # self.adv：一个占位符
-        self.edge_act_loss = tf.multiply(tf.log(self.selected_edge_prob + 1e-6), -self.adv)
+        self.edge_act_loss = tf.multiply(tf.math.log(self.selected_edge_prob + 1e-6), -self.adv)
         # prob on each job
         # self.prob_each_job = tf.reshape(
         #     tf.sparse_tensor_dense_matmul(self.gsn.summ_mats[0],
@@ -89,9 +90,9 @@ class ActorAgent(Agent):
         # define combined loss
         # self.act_loss = self.adv_loss
 
+        # todo修改
         # get training parameters
-        self.edge_params = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="policy")
+        self.edge_params = self.gcn_policy.trainable_variables
 
         # actor gradients
         self.edge_act_gradients = tf.gradients(self.edge_act_loss, self.edge_params)
@@ -127,17 +128,24 @@ class ActorAgent(Agent):
             gcn_policy_outputs, [batch_size, -1, self.output_dim])
 
         # (4) actor neural network
-        with tf.variable_scope("policy"):
+        with tf.name_scope("policy"):
             # -- part A, the distribution over nodes --
             policy_input = tf.concat([policy_inputs_reshape, gcn_policy_outputs_reshape], axis=2)
-            # print('merge_node', merge_node.shape)
-            # 节点网络结构
-            policy_hid_0 = tl.fully_connected(policy_input, 32, activation_fn=act_fn)
-            policy_hid_1 = tl.fully_connected(policy_hid_0, 16, activation_fn=act_fn)
-            policy_hid_2 = tl.fully_connected(policy_hid_1, 8, activation_fn=act_fn)
-            policy_outputs = tl.fully_connected(policy_hid_2, 1, activation_fn=None)
 
-            # reshape the output dimension (batch_size, total_num_nodes)
+            # 构建节点网络结构
+            # 第一层：输出维度为32，激活函数为 act_fn
+            policy_hid_0 = tl.Dense(32, activation=act_fn)(policy_input)
+            # 第二层：输出维度为16，激活函数为 act_fn
+            policy_hid_1 = tl.Dense(16, activation=act_fn)(policy_hid_0)
+            # 第三层：输出维度为8，激活函数为 act_fn
+            policy_hid_2 = tl.Dense(8, activation=act_fn)(policy_hid_1)
+            # 输出层：输出维度为1，不使用激活函数
+            policy_outputs = tl.Dense(1, activation=None)(policy_hid_2)
+
+            # 重塑输出形状为 (batch_size, total_num_nodes)
+            policy_outputs = tf.reshape(policy_outputs, [batch_size, -1])
+
+            # 重塑输出形状为 (batch_size, total_num_nodes)
             policy_outputs = tf.reshape(policy_outputs, [batch_size, -1])
 
             # 使用绝对值处理DNN输出
@@ -146,12 +154,12 @@ class ActorAgent(Agent):
             # policy_outputs = tf.divide(policy_outputs, policy_max)
             # policy_outputs = tf.nn.softmax(policy_outputs, dim=-1)
 
-            # 使用减去最小值处理网络输出
-            policy_min = tf.reduce_min(policy_outputs, keep_dims=True, axis=-1)
+            # 使用“减去最小值”方法处理网络输出
+            policy_min = tf.reduce_min(policy_outputs, keepdims=True, axis=-1)
             policy_outputs = tf.subtract(policy_outputs, policy_min)
-            policy_max = tf.reduce_max(policy_outputs, keep_dims=True, axis=-1)
+            policy_max = tf.reduce_max(policy_outputs, keepdims=True, axis=-1)
             policy_outputs = tf.divide(policy_outputs, policy_max)
-            policy_outputs = tf.nn.softmax(policy_outputs, dim=-1)
+            policy_outputs = tf.nn.softmax(policy_outputs, axis=-1)
 
             return policy_outputs
 
@@ -254,16 +262,19 @@ def discount(rewards, gamma):
 
 def main():
     np.random.seed()
-    tf.set_random_seed(0)
+    tf.random.set_seed(0)
 
-    # gpu configuration
-    config = tf.ConfigProto(
-        device_count={'GPU': args.master_num_gpu},
-        gpu_options=tf.GPUOptions(
-            per_process_gpu_memory_fraction=args.master_gpu_fraction))
-    sess = tf.Session(config=config)
+    # 配置GPU（例如开启内存自增长）
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
+
     actor_agent = ActorAgent(
-        sess, args.policy_input_dim, 1028,
+        args.policy_input_dim, 1028,
         args.hid_dims, args.output_dim, args.max_depth)
 
     # 加载已经训练好的模型，参数是模型位置，默认为models/zcm
